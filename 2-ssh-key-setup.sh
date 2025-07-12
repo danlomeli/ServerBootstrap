@@ -108,5 +108,7 @@ echo "If you can't connect, you may need to:"
 echo "1. Check your local private key permissions (chmod 600 ~/.ssh/id_rsa)"
 echo "2. Verify the public key was copied correctly"
 echo "3. Check SSH client configuration"
+echo "Generate key-pairs for Github"
+echo  " ssh-keygen -t ed25519 -b 4096 -C "your-email@example.com" -f ~/.ssh/id_ed25519"
 echo
 read -p "Press Enter after confirming SSH key login works..."

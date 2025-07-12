@@ -29,7 +29,8 @@ echo "Installing Docker prerequisites..."
 sudo apt-get install -y \
     ca-certificates \
     gnupg \
-    lsb-release
+    lsb-release \
+    git-lfs
 
 # Add Docker's official GPG key
 echo "Adding Docker GPG key..."
