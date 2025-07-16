@@ -31,6 +31,15 @@ get_username() {
     done
 }
 
+start_service() {
+    local service_name=$1
+    if [ -f /.dockerenv ]; then
+        service "$service_name" start
+    else
+        systemctl start "$service_name"
+    fi
+}
+
 # Get username from user
 USERNAME=$(get_username)
 

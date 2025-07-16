@@ -1,0 +1,25 @@
+{
+    "name": "Ubuntu Bootstrap Test Environment",
+    "build": {
+        "dockerfile": "../Dockerfile"
+    },
+    "privileged": true,
+    "init": true,
+    "runArgs": [
+        "--privileged",
+        "--name=ubuntu-bootstrap"
+    ],
+    "overrideCommand": false,
+    "workspaceFolder": "/workspace",
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+    "postCreateCommand": "service ssh start && echo 'SSH service started'",
+    "remoteUser": "root",
+    "features": {},
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-vscode.vscode-json"
+            ]
+        }
+    }
+}
