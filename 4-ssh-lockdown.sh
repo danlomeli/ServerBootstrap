@@ -190,6 +190,12 @@ update_ssh_config "AllowTcpForwarding" "local" "$SSHD_CONFIG"
 update_ssh_config "GatewayPorts" "no" "$SSHD_CONFIG"
 update_ssh_config "PermitTunnel" "no" "$SSHD_CONFIG"
 update_ssh_config "X11Forwarding" "no" "$SSHD_CONFIG"
+update_ssh_config "LogLevel" "INFO" "$SSHD_CONFIG"
+update_ssh_config "ClientAliveInterval" "180" "$SSHD_CONFIG"
+update_ssh_config "MaxStartups" "5:10:20" "$SSHD_CONFIG"
+
+# Add explicit AuthorizedKeysFile specification
+echo "AuthorizedKeysFile .ssh/authorized_keys" >> "$SSHD_CONFIG"
 
 # 8. Set UseDNS to no for faster connections
 print_status "Disabling DNS lookups for faster connections"
@@ -419,3 +425,4 @@ echo "==================================================================="
 echo "Backup saved to: $BACKUP_DIR"
 echo "Script completed: $(date)"
 echo "==================================================================="
+
