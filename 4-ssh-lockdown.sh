@@ -109,13 +109,26 @@ restart_service() {
 
 stop_ssh_socket() {
     if [ ! -f /.dockerenv ]; then
-        if systemctl is-active --quiet ssh.socket 2>/dev/null; then
-            print_status "Stopping and disabling ssh.socket for port change"
-            systemctl stop ssh.socket
-            systemctl disable ssh.socket
-            print_status "ssh.socket stopped and disabled"
+        # Check if we're using socket activation
+        local uses_socket_activation=false
+        if systemctl list-unit-files | grep -q "ssh.socket" && [ -f /lib/systemd/system/ssh.socket ]; then
+            if grep -q "ListenStream=22" /lib/systemd/system/ssh.socket 2>/dev/null; then
+                uses_socket_activation=true
+            fi
+        fi
+        
+        if [ "$uses_socket_activation" = true ]; then
+            print_status "System uses socket activation - socket will be reconfigured instead of stopped"
         else
-            print_notice "ssh.socket is not active or doesn't exist"
+            # Traditional mode - stop the socket
+            if systemctl is-active --quiet ssh.socket 2>/dev/null; then
+                print_status "Stopping and disabling ssh.socket for port change"
+                systemctl stop ssh.socket
+                systemctl disable ssh.socket
+                print_status "ssh.socket stopped and disabled"
+            else
+                print_notice "ssh.socket is not active or doesn't exist"
+            fi
         fi
     fi
 }
