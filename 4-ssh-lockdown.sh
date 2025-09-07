@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# SSH Configuration Fix Script - Enhanced Version
+# SSH Configuration Fix Script - Enhanced Version with Boot Verification
 # This script applies the missing hardening configurations and handles systemd socket activation
 
 set -euo pipefail
@@ -43,37 +43,67 @@ start_service() {
     fi
 }
 
+# Enhanced restart function with proper systemd management
 restart_service() {
     local service_name="$1"
     if [ -f /.dockerenv ]; then
         print_status "Docker environment detected, using service command"
-        service "$service_name" restart
+        service "$service_name" start
     else
         print_status "Handling systemd socket activation for SSH"
         
-        # Check if ssh.socket exists and is active
-        if systemctl is-active --quiet ssh.socket 2>/dev/null; then
-            print_status "Stopping ssh.socket to allow port change"
-            systemctl stop ssh.socket
-            systemctl disable ssh.socket
+        # Stop and mask ssh.socket to prevent it from interfering
+        if systemctl list-unit-files | grep -q "ssh.socket"; then
+            print_status "Stopping and masking ssh.socket"
+            systemctl stop ssh.socket 2>/dev/null || true
+            systemctl disable ssh.socket 2>/dev/null || true
+            systemctl mask ssh.socket 2>/dev/null || true
         fi
         
-        # Check if ssh.service exists, otherwise try sshd.service
+        # Determine correct service name
+        local ssh_service=""
         if systemctl list-unit-files | grep -q "^ssh.service"; then
-            print_status "Restarting ssh.service"
-            systemctl restart ssh.service
-            systemctl enable ssh.service
+            ssh_service="ssh.service"
         elif systemctl list-unit-files | grep -q "^sshd.service"; then
-            print_status "Restarting sshd.service"
-            systemctl restart sshd.service
-            systemctl enable sshd.service
+            ssh_service="sshd.service"
         else
             print_error "Neither ssh.service nor sshd.service found"
             return 1
         fi
         
-        # Reload systemd daemon to pick up any changes
+        print_status "Using service: $ssh_service"
+        
+        # Reload systemd daemon first
         systemctl daemon-reload
+        
+        # Enable the service for startup
+        print_status "Enabling $ssh_service for automatic startup"
+        systemctl enable "$ssh_service"
+        
+        # Start/restart the service
+        print_status "Restarting $ssh_service"
+        systemctl restart "$ssh_service"
+        
+        # Verify it's running
+        if systemctl is-active --quiet "$ssh_service"; then
+            print_status "✅ $ssh_service is running"
+            
+            # Show listening ports
+            print_status "SSH is listening on:"
+            ss -tlnp | grep :2222 || netstat -tlnp | grep :2222 || true
+        else
+            print_error "❌ $ssh_service failed to start"
+            systemctl status "$ssh_service" --no-pager -l
+            return 1
+        fi
+        
+        # Double-check it will start on boot
+        if systemctl is-enabled --quiet "$ssh_service"; then
+            print_status "✅ $ssh_service is enabled for startup"
+        else
+            print_warning "⚠️  $ssh_service is NOT enabled for startup"
+            systemctl enable "$ssh_service"
+        fi
     fi
 }
 
@@ -86,6 +116,107 @@ stop_ssh_socket() {
             print_status "ssh.socket stopped and disabled"
         else
             print_notice "ssh.socket is not active or doesn't exist"
+        fi
+    fi
+}
+
+# Function to verify boot configuration
+verify_boot_config() {
+    print_status "Verifying boot configuration..."
+    
+    if [ ! -f /.dockerenv ]; then
+        # Check if ssh.socket is properly masked
+        if systemctl is-enabled ssh.socket 2>/dev/null | grep -q "masked"; then
+            print_status "✅ ssh.socket is properly masked"
+        else
+            print_warning "⚠️  ssh.socket may not be properly masked"
+            systemctl mask ssh.socket 2>/dev/null || true
+            print_status "✅ Masked ssh.socket"
+        fi
+        
+        # Check SSH service enablement
+        local ssh_service=""
+        if systemctl list-unit-files | grep -q "^ssh.service"; then
+            ssh_service="ssh.service"
+        elif systemctl list-unit-files | grep -q "^sshd.service"; then
+            ssh_service="sshd.service"
+        fi
+        
+        if [ -n "$ssh_service" ]; then
+            if systemctl is-enabled --quiet "$ssh_service"; then
+                print_status "✅ $ssh_service is enabled for boot"
+            else
+                print_error "❌ $ssh_service is NOT enabled for boot"
+                systemctl enable "$ssh_service"
+                print_status "✅ Enabled $ssh_service for boot"
+            fi
+        fi
+        
+        # Check for conflicting socket files
+        print_status "Checking for socket configuration conflicts..."
+        if [ -f /etc/systemd/system/ssh.socket.d/override.conf ]; then
+            print_warning "Found socket override file that might conflict"
+            print_warning "Consider removing: /etc/systemd/system/ssh.socket.d/override.conf"
+        fi
+        
+        # Check if ssh.socket is listening on port 22
+        if systemctl is-active --quiet ssh.socket 2>/dev/null; then
+            print_warning "⚠️  ssh.socket is still active and may conflict with port change"
+            print_status "Stopping ssh.socket..."
+            systemctl stop ssh.socket
+            systemctl mask ssh.socket
+        fi
+        
+        # Verify systemd daemon is aware of changes
+        print_status "Reloading systemd daemon..."
+        systemctl daemon-reload
+        
+        print_status "✅ Boot configuration verification completed"
+    else
+        print_notice "Docker environment detected - skipping systemd boot configuration"
+    fi
+}
+
+# Create SSH privilege separation directory if missing
+create_ssh_privsep_dir() {
+    local privsep_dir="/run/sshd"
+    
+    print_status "Checking SSH privilege separation directory..."
+    
+    if [ ! -d "$privsep_dir" ]; then
+        print_status "Creating missing privilege separation directory: $privsep_dir"
+        
+        # Create the directory
+        mkdir -p "$privsep_dir"
+        
+        # Set proper ownership and permissions
+        chown root:root "$privsep_dir"
+        chmod 755 "$privsep_dir"
+        
+        print_status "✅ Created $privsep_dir with proper permissions"
+        
+        # Also create a systemd-tmpfiles configuration to ensure it persists across reboots
+        if command -v systemd-tmpfiles >/dev/null 2>&1; then
+            cat > /etc/tmpfiles.d/ssh.conf << 'EOF'
+# SSH privilege separation directory
+d /run/sshd 0755 root root -
+EOF
+            print_status "✅ Created systemd-tmpfiles configuration for persistence"
+        fi
+    else
+        print_status "✅ Privilege separation directory already exists"
+        
+        # Verify permissions
+        local current_perms
+        current_perms=$(stat -c "%a" "$privsep_dir")
+        local current_owner
+        current_owner=$(stat -c "%U:%G" "$privsep_dir")
+        
+        if [ "$current_perms" != "755" ] || [ "$current_owner" != "root:root" ]; then
+            print_status "Fixing permissions on $privsep_dir"
+            chown root:root "$privsep_dir"
+            chmod 755 "$privsep_dir"
+            print_status "✅ Fixed permissions on $privsep_dir"
         fi
     fi
 }
@@ -255,53 +386,12 @@ else
     print_warning "Could not determine current non-root user. Please set AllowUsers manually."
 fi
 
-# Create SSH privilege separation directory if missing
-create_ssh_privsep_dir() {
-    local privsep_dir="/run/sshd"
-    
-    print_status "Checking SSH privilege separation directory..."
-    
-    if [ ! -d "$privsep_dir" ]; then
-        print_status "Creating missing privilege separation directory: $privsep_dir"
-        
-        # Create the directory
-        mkdir -p "$privsep_dir"
-        
-        # Set proper ownership and permissions
-        chown root:root "$privsep_dir"
-        chmod 755 "$privsep_dir"
-        
-        print_status "✅ Created $privsep_dir with proper permissions"
-        
-        # Also create a systemd-tmpfiles configuration to ensure it persists across reboots
-        if command -v systemd-tmpfiles >/dev/null 2>&1; then
-            cat > /etc/tmpfiles.d/ssh.conf << 'EOF'
-# SSH privilege separation directory
-d /run/sshd 0755 root root -
-EOF
-            print_status "✅ Created systemd-tmpfiles configuration for persistence"
-        fi
-    else
-        print_status "✅ Privilege separation directory already exists"
-        
-        # Verify permissions
-        local current_perms
-        current_perms=$(stat -c "%a" "$privsep_dir")
-        local current_owner
-        current_owner=$(stat -c "%U:%G" "$privsep_dir")
-        
-        if [ "$current_perms" != "755" ] || [ "$current_owner" != "root:root" ]; then
-            print_status "Fixing permissions on $privsep_dir"
-            chown root:root "$privsep_dir"
-            chmod 755 "$privsep_dir"
-            print_status "✅ Fixed permissions on $privsep_dir"
-        fi
-    fi
-}
-
 echo ""
 # Create privilege separation directory before testing
 create_ssh_privsep_dir
+
+# Verify boot configuration before testing
+verify_boot_config
 
 print_status "Testing SSH configuration..."
 if sshd -t -f "$SSHD_CONFIG"; then
@@ -345,6 +435,7 @@ if sshd -t -f "$SSHD_CONFIG"; then
     echo "  2. Disable ssh.socket to prevent conflicts"
     echo "  3. Restart SSH service on the new port (2222)"
     echo "  4. Enable SSH service for auto-start"
+    echo "  5. Verify boot configuration"
     echo ""
     
     # Safety warnings
@@ -374,6 +465,10 @@ if sshd -t -f "$SSHD_CONFIG"; then
         
         # Restart SSH service
         if restart_service ssh; then
+            echo ""
+            # Run final boot configuration verification
+            verify_boot_config
+            
             print_status "✅ SSH service restarted successfully!"
             echo ""
             echo "==================================================================="
@@ -425,4 +520,3 @@ echo "==================================================================="
 echo "Backup saved to: $BACKUP_DIR"
 echo "Script completed: $(date)"
 echo "==================================================================="
-
