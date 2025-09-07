@@ -65,9 +65,16 @@ chown $USERNAME:$USERNAME /home/$USERNAME/.ssh
 # Backup SSH config
 cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup
 
-# Disable root login via SSH
+# Disable root login
 sed -i 's/#PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
 sed -i 's/PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
+
+# Disable password authentication (force key-only login)
+sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+sed -i 's/PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+
+# Ensure public key authentication is enabled
+sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config
 
 # Ensure the setting is added if it doesn't exist
 if ! grep -q "PermitRootLogin" /etc/ssh/sshd_config; then
