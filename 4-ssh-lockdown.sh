@@ -509,6 +509,127 @@ else
     echo "Configuration test failed. Details:"
     sshd -t -f "$SSHD_CONFIG" 2>&1 || true
     echo ""
+    
+    # Check if the privilege separation directory exists
+    if [ ! -d "/run/sshd" ]; then
+        print_error "Missing privilege separation directory: /run/sshd"
+        print_status "Attempting to create it now..."
+        if create_ssh_privsep_dir; then
+            print_status "Retrying SSH configuration test..."
+            if sshd -t -f "$SSHD_CONFIG"; then
+                print_status "✅ SSH configuration is now valid after creating privilege directory!"
+                echo ""
+                # Continue with the restart process...
+                echo "==================================================================="
+                echo "            CONFIGURATION APPLIED SUCCESSFULLY!"
+                echo "==================================================================="
+                echo ""
+                
+                print_warning "IMPORTANT: SSH service needs to be restarted to apply changes"
+                print_warning "The SSH port will change from 22 to 2222"
+                echo ""
+                
+                # Display current configuration summary
+                echo "Configuration Summary:"
+                echo "  • SSH Port: 2222"
+                echo "  • Root Login: Disabled"
+                echo "  • Password Authentication: Disabled (keys only)"
+                echo "  • Max Auth Tries: 3"
+                echo "  • Client Timeout: 10 minutes (300s × 2)"
+                echo "  • Strong Cryptography: Enabled"
+                echo "  • Logging: VERBOSE"
+                if [[ -n "$CURRENT_USER" && "$CURRENT_USER" != "root" ]]; then
+                    echo "  • Allowed User: $CURRENT_USER"
+                fi
+                echo ""
+                
+                # Enhanced restart prompt
+                echo "==================================================================="
+                echo "                    SSH SERVICE RESTART REQUIRED"
+                echo "==================================================================="
+                echo ""
+                print_warning "CRITICAL: SSH configuration changes require service restart"
+                print_warning "The SSH port will change from 22 to 2222"
+                echo ""
+                
+                # Show what will happen
+                echo "The restart process will:"
+                echo "  1. Stop ssh.socket (if active) to release port 22"
+                echo "  2. Disable ssh.socket to prevent conflicts"
+                echo "  3. Restart SSH service on the new port (2222)"
+                echo "  4. Enable SSH service for auto-start"
+                echo "  5. Verify boot configuration"
+                echo ""
+                
+                # Safety warnings
+                print_error "⚠️  IMPORTANT SAFETY NOTES:"
+                echo "  • Keep this terminal session open during restart"
+                echo "  • Test new connection in a separate terminal"
+                echo "  • Have console/physical access available as backup"
+                echo "  • Ensure your user has sudo privileges"
+                echo ""
+                
+                # Show connection test commands
+                echo "After restart, test connection with:"
+                echo "  ssh -p 2222 $CURRENT_USER@$(hostname -I | awk '{print $1}' 2>/dev/null || echo 'YOUR_SERVER_IP')"
+                echo "  ssh -p 2222 $CURRENT_USER@localhost"
+                echo ""
+                
+                # Ask user if they want to restart SSH service automatically
+                echo -n "Do you want to restart SSH service now? [y/N]: "
+                read -r restart_choice
+                
+                if [[ "$restart_choice" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+                    echo ""
+                    print_status "Stopping ssh.socket and restarting SSH service..."
+                    
+                    # Stop ssh.socket first if it exists
+                    stop_ssh_socket
+                    
+                    # Restart SSH service
+                    if restart_service ssh; then
+                        echo ""
+                        # Run final boot configuration verification
+                        verify_boot_config
+                        
+                        print_status "✅ SSH service restarted successfully!"
+                        echo ""
+                        echo "==================================================================="
+                        echo "                    RESTART COMPLETED"
+                        echo "==================================================================="
+                        echo ""
+                        print_status "SSH is now running on port 2222 with hardened configuration"
+                        echo ""
+                        echo "Test connection from another terminal:"
+                        echo "  ssh -p 2222 $CURRENT_USER@$(hostname -I | awk '{print $1}')"
+                        echo "  ssh -p 2222 $CURRENT_USER@localhost"
+                        echo ""
+                        print_warning "KEEP THIS TERMINAL OPEN until you verify the connection works!"
+                    else
+                        print_error "❌ Failed to restart SSH service!"
+                        echo "You may need to restart manually:"
+                        echo "  sudo systemctl stop ssh.socket"
+                        echo "  sudo systemctl restart ssh"
+                        exit 1
+                    fi
+                else
+                    echo ""
+                    echo "To restart SSH service manually:"
+                    echo "  sudo systemctl stop ssh.socket"
+                    echo "  sudo systemctl daemon-reload"
+                    echo "  sudo systemctl restart ssh"
+                    echo ""
+                    echo "Then test connection from another terminal:"
+                    echo "  ssh -p 2222 $CURRENT_USER@$(hostname -I | awk '{print $1}' 2>/dev/null || echo 'YOUR_IP')"
+                    echo "  ssh -p 2222 $CURRENT_USER@localhost"
+                    echo ""
+                    print_warning "IMPORTANT: Don't close this terminal until you verify the connection works!"
+                fi
+                exit 0
+            fi
+        fi
+    fi
+    
     echo "Restoring original configuration..."
     cp "$BACKUP_DIR/sshd_config.original" "$SSHD_CONFIG"
     print_status "Original configuration restored from backup"
