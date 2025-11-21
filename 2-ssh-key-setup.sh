@@ -40,8 +40,8 @@ fi
 
 chmod 600 ~/.ssh/authorized_keys
 
-echo "Please paste your public key (usually from ~/.ssh/id_rsa.pub on your local machine):"
-echo "Tip: You can copy your public key using: cat ~/.ssh/id_rsa.pub"
+echo "Please paste your public key (usually from ~/.ssh/ed25519.pub on your local machine):"
+echo "Tip: You can copy your public key using: cat ~/.ssh/ed25519.pub"
 echo "Then paste it below and press Enter, followed by Ctrl+D:"
 echo
 
@@ -71,14 +71,19 @@ sudo cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup-$(date +%Y%m%d-%H%M%S)
 sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
 sudo sed -i 's/PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
 
-# Ensure the setting is added if it doesn't exist
-if ! sudo grep -q "PasswordAuthentication" /etc/ssh/sshd_config; then
-    echo "PasswordAuthentication no" | sudo tee -a /etc/ssh/sshd_config
+# Disable root login
+sudo sed -i 's/#PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
+sudo sed -i 's/PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
+sudo sed -i 's/PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config
+
+if ! sudo grep -q "^PermitRootLogin" /etc/ssh/sshd_config; then
+    echo "PermitRootLogin no" | sudo tee -a /etc/ssh/sshd_config
 fi
 
 # Also disable challenge response authentication
 sudo sed -i 's/#ChallengeResponseAuthentication yes/ChallengeResponseAuthentication no/' /etc/ssh/sshd_config
 sudo sed -i 's/ChallengeResponseAuthentication yes/ChallengeResponseAuthentication no/' /etc/ssh/sshd_config
+sudo sed -i 's/KbdInteractiveAuthentication yes/KbdInteractiveAuthentication no/' /etc/ssh/sshd_config
 
 if ! sudo grep -q "ChallengeResponseAuthentication" /etc/ssh/sshd_config; then
     echo "ChallengeResponseAuthentication no" | sudo tee -a /etc/ssh/sshd_config
