@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# SSH Hardening Script - Revised for RackNerd
-# Focuses on reliability across Ubuntu versions with easy rollback
+# SSH Hardening Script - Fixed Version
+# Improved SSH restart logic to prevent false failures and rollbacks
 
 set -euo pipefail
 
@@ -49,7 +49,7 @@ detect_environment() {
 
 ENV_TYPE=$(detect_environment)
 
-# Universal service restart
+# Universal service restart - FIXED VERSION
 restart_ssh() {
     print_status "Restarting SSH service..."
     
@@ -60,24 +60,73 @@ restart_ssh() {
     
     if [ "$ENV_TYPE" = "unknown" ]; then
         print_error "Cannot determine SSH service type"
-        return 1
+        print_status "Attempting manual restart..."
+        
+        # Try to find and restart SSH anyway
+        if systemctl list-units --type=service | grep -q "ssh\.service"; then
+            ENV_TYPE="ssh.service"
+        elif systemctl list-units --type=service | grep -q "sshd\.service"; then
+            ENV_TYPE="sshd.service"
+        else
+            # Last resort: try both
+            service ssh restart 2>/dev/null || service sshd restart 2>/dev/null
+            sleep 2
+            if ss -tlnp 2>/dev/null | grep -q :2222; then
+                print_status "✅ SSH service running on port 2222"
+                return 0
+            fi
+            return 1
+        fi
     fi
     
-    # Stop and mask socket to prevent conflicts
+    # Stop and mask socket to prevent conflicts - CRITICAL for port changes
+    print_status "Stopping SSH socket (if present)..."
     if systemctl list-unit-files 2>/dev/null | grep -q "ssh.socket"; then
         systemctl stop ssh.socket 2>/dev/null || true
         systemctl disable ssh.socket 2>/dev/null || true
         systemctl mask ssh.socket 2>/dev/null || true
+        print_status "SSH socket disabled"
     fi
     
+    # Reload systemd to pick up any changes
     systemctl daemon-reload
-    systemctl enable "$ENV_TYPE"
+    
+    # Ensure service is enabled
+    systemctl enable "$ENV_TYPE" 2>/dev/null || true
+    
+    # Restart the service
+    print_status "Restarting $ENV_TYPE..."
     systemctl restart "$ENV_TYPE"
     
+    # Wait a moment for service to start
+    sleep 2
+    
+    # Check if service is active
     if systemctl is-active --quiet "$ENV_TYPE"; then
-        print_status "✅ SSH service running on port 2222"
-        ss -tlnp 2>/dev/null | grep :2222 || netstat -tlnp 2>/dev/null | grep :2222 || true
-        return 0
+        print_status "✅ SSH service is active"
+        
+        # Verify it's actually listening on port 2222
+        if ss -tlnp 2>/dev/null | grep -q :2222 || netstat -tlnp 2>/dev/null | grep -q :2222; then
+            print_status "✅ SSH listening on port 2222"
+            ss -tlnp 2>/dev/null | grep :2222 || netstat -tlnp 2>/dev/null | grep :2222 || true
+            return 0
+        else
+            print_warning "Service active but not listening on port 2222 yet"
+            print_status "Checking port status..."
+            ss -tlnp 2>/dev/null | grep ssh || netstat -tlnp 2>/dev/null | grep ssh || true
+            
+            # Give it a few more seconds
+            sleep 3
+            if ss -tlnp 2>/dev/null | grep -q :2222 || netstat -tlnp 2>/dev/null | grep -q :2222; then
+                print_status "✅ SSH now listening on port 2222"
+                return 0
+            fi
+            
+            print_error "❌ SSH service active but not binding to port 2222"
+            print_status "This may require manual intervention"
+            systemctl status "$ENV_TYPE" --no-pager -l
+            return 1
+        fi
     else
         print_error "❌ SSH service failed to start"
         systemctl status "$ENV_TYPE" --no-pager -l
@@ -128,7 +177,7 @@ add_if_missing() {
 }
 
 echo "==================================================================="
-echo "         SSH HARDENING SCRIPT - RACKNERD OPTIMIZED"
+echo "         SSH HARDENING SCRIPT - FIXED VERSION"
 echo "==================================================================="
 echo ""
 
@@ -286,17 +335,25 @@ if [[ "$restart_choice" =~ ^[Yy]$ ]]; then
         echo "  ssh -p 2222 $CURRENT_USER@\$(hostname -I | awk '{print \$1}')"
         echo ""
         print_error "DO NOT CLOSE THIS TERMINAL until connection verified!"
-    else
-        print_error "❌ SSH restart failed!"
         echo ""
-        print_status "Attempting rollback..."
-        cp "$BACKUP_DIR/sshd_config.original" "$SSHD_CONFIG"
-        
-        if [ "$ENV_TYPE" != "docker" ] && [ "$ENV_TYPE" != "unknown" ]; then
-            systemctl restart "$ENV_TYPE" 2>/dev/null || service ssh restart 2>/dev/null || true
-        fi
-        
-        print_status "Rolled back to original configuration"
+        print_notice "If connection fails, rollback with:"
+        echo "  sudo cp $BACKUP_DIR/sshd_config.original $SSHD_CONFIG"
+        echo "  sudo systemctl restart $ENV_TYPE"
+    else
+        print_error "❌ SSH restart failed or not listening on port 2222!"
+        echo ""
+        print_warning "The configuration is saved but SSH may need manual restart."
+        echo ""
+        print_notice "Try these manual steps:"
+        echo "  1. sudo systemctl stop ssh.socket"
+        echo "  2. sudo systemctl disable ssh.socket"
+        echo "  3. sudo systemctl restart $ENV_TYPE"
+        echo "  4. sudo ss -tlnp | grep :2222"
+        echo ""
+        print_notice "To rollback if needed:"
+        echo "  sudo cp $BACKUP_DIR/sshd_config.original $SSHD_CONFIG"
+        echo "  sudo systemctl restart $ENV_TYPE"
+        echo ""
         exit 1
     fi
 else
@@ -306,6 +363,7 @@ else
     echo "To apply manually:"
     if [ "$ENV_TYPE" != "docker" ] && [ "$ENV_TYPE" != "unknown" ]; then
         echo "  sudo systemctl stop ssh.socket"
+        echo "  sudo systemctl disable ssh.socket"
         echo "  sudo systemctl restart $ENV_TYPE"
     else
         echo "  sudo service ssh restart"
